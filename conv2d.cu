@@ -1,107 +1,94 @@
 #include <stdio.h>
 #include <math.h>
+#include "conv2d.h"
 
-__device__ float **initialize_2d(int height, int width)
+__device__ float apply_filter(float** image, int x, int y, float** filter, int filter_size)
 {
-    float **array = (float **)malloc(height * sizeof(float *));
+    float result = 0.f;
 
-    for (int i = 0; i < height; i++)
+    for (int i = 0; i < filter_size; i++)
     {
-        array[i] = (float *)malloc(height * sizeof(float));
+        for (int j = 0; j < filter_size; j++)
+        {
+            result += image[y + i][x + j] * filter[i][j];
+        }
     }
 
-    return array;
+    return result;
 }
 
-__device__ void free_2d(float **array, int height, int width)
-{
-    for (int i = 0; i < height; i++)
-    {
-        free(array[i]);
-    }
-
-    free(array);
-}
-
-__global__ void conv_2d(float **image, int image_width, int image_height, float **filter, int filter_size)
+__global__ void conv_2d(float **image_input, float **image_output, int image_width, int image_height, float **filter, int filter_size)
 {
     // padding = 0, stride = 1
     int out_width = image_width - filter_size + 1;
     int out_height = image_height - filter_size + 1;
 
-    float **out_image = initialize_2d(out_height, out_width);
+    float division = ((float)out_height / blockDim.x);
+    int start_y = division * threadIdx.x;
+    int end_y = division * (threadIdx.x + 1);
 
-    for (int i = 0; i < out_height; i++)
+    for (int y = start_y; y < end_y; y++)
     {
-        for (int j = 0; j < out_width; j++)
+        for (int x = 0; x < out_width; x++)
         {
-            float result = 0.f;
-
-            for (int i_f = 0; i_f < filter_size; i_f++)
-            {
-                for (int j_f = 0; j_f < filter_size; j_f++)
-                {
-                    result += image[i][j] * filter[i_f][j_f];
-                }
-            }
-
-            out_image[i][j] = result;
+            image_output[y][x] = apply_filter(image_input, x, y, filter, filter_size);
         }
     }
-
-    for (int i = 0; i < out_width; i++)
-    {
-        for (int j = 0; j < out_height; j++)
-        {
-            printf("%.2f ", out_image[i][j]);
-        }
-
-        printf("\n");
-    }
-
-    free_2d(out_image, out_height, out_width);
 }
 
-int main()
+float** allocCudaMemory(int x, int y) 
 {
-    int img_x = 5, img_y = 5;
-    float **image;
+    float** mem;
+    cudaMallocManaged(&mem, y * sizeof(float*));
 
+    for (int i = 0; i < y; i++) {
+        cudaMallocManaged(&mem[i], x * sizeof(float));
+    }
+
+    return mem;
+}
+
+float** runx(int** image, int width, int height)
+{
+    // load image
+
+    // Cuda goes here...
+    int img_x = width, img_y = height;
     int filter_size = 3;
+    int img_x_out = img_x - filter_size + 1;
+    int img_y_out = img_y - filter_size + 1;
+
+    float **image_input;
+    float **image_output;
     float **filter;
 
-    cudaMallocManaged(&image, img_y * sizeof(float *));
-    cudaMallocManaged(&filter, filter_size * sizeof(float *));
+    image_input = allocCudaMemory(img_x, img_y);
+    image_output = allocCudaMemory(img_x_out, img_y_out);
+    filter = allocCudaMemory(filter_size, filter_size);
 
-    // initialize
     for (int i = 0; i < img_x; i++)
     {
-        cudaMallocManaged(&image[i], img_x * sizeof(float));
         for (int j = 0; j < img_y; j++)
         {
-            image[i][j] = 1.0f;
+            image_input[i][j] = (float)image[i][j] / 255.0;
         }
     }
 
     for (int i = 0; i < filter_size; i++)
     {
-        cudaMallocManaged(&filter[i], filter_size * sizeof(float));
         for (int j = 0; j < filter_size; j++)
         {
-            filter[i][j] = 2.0f;
+            filter[i][j] = 1.0f;
         }
     }
 
-    int blockSize = 1;
+    int blockSize = 2;
     int numBlocks = 1;
 
-    conv_2d<<<numBlocks, blockSize>>>(image, img_x, img_y, filter, filter_size);
+    conv_2d<<<numBlocks, blockSize>>>(image_input, image_output, img_x, img_y, filter, filter_size);
     fflush(stdout);
 
     cudaDeviceSynchronize();
 
-    cudaFree(image);
-    cudaFree(filter);
-
-    return 0;
+    return image_output;
 }
