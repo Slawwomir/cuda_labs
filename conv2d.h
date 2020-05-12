@@ -1,0 +1,1 @@
+float** runx(int** image, int width, int height);
